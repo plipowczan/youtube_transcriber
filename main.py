@@ -12,6 +12,7 @@ import yt_dlp
 import whisper
 import logging
 import sys
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -67,8 +68,22 @@ def download_audio(video_url: str) -> str:
     temp_dir = tempfile.gettempdir()
     output_template = os.path.join(temp_dir, '%(id)s.%(ext)s')
     
+    # Proper HTTP headers to mimic browser requests
+    http_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-us,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Referer': 'https://www.youtube.com/'
+    }
+    
+    # Configuration to bypass restrictions and improve compatibility
+    # Skip web client that requires JavaScript runtime - use alternative extractors instead
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -77,14 +92,43 @@ def download_audio(video_url: str) -> str:
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
+        'http_headers': http_headers,
+        'socket_timeout': 30,
+        'retries': 10,
+        'fragment_retries': 10,
+        'skip_unavailable_fragments': True,
+        'continue_dl': True,
+        # Use android and ios clients to avoid JavaScript requirement
+        'extractor_args': {
+            'youtube': {
+                'skip': ['webpage'],  # Skip web client that requires JavaScript
+            }
+        },
     }
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=True)
-        video_id = info['id']
-        audio_file = os.path.join(temp_dir, f"{video_id}.mp3")
+    # Retry logic with exponential backoff and strategy switching
+    max_retries = 3
+    retry_delay = 2
     
-    return audio_file
+    for attempt in range(max_retries):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                video_id = info['id']
+                audio_file = os.path.join(temp_dir, f"{video_id}.mp3")
+            return audio_file
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            # Check if it's a temporary error (403, 429, connection timeout)
+            is_temp_error = any(code in error_msg for code in ['403', '429', 'timed out', 'connection', 'temporary'])
+            
+            if attempt < max_retries - 1 and is_temp_error:
+                wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                logger.warning(f"Download attempt {attempt + 1} failed with '{error_msg}'. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"Download failed after {attempt + 1} attempt(s): {error_msg}")
+                raise
 
 
 def transcribe_audio(file_path: str) -> str:
