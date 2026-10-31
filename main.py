@@ -3,7 +3,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 import re
 import os
 import tempfile
@@ -183,11 +182,12 @@ async def transcribe_video(request: TranscribeRequest):
         try:
             # Try to get transcript using YouTube API first
             logger.info(f"Attempting to fetch captions from YouTube API for {video_id}...")
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            ytt_api = YouTubeTranscriptApi()
+            transcript = ytt_api.fetch(video_id)
             logger.info("Successfully fetched captions from YouTube API")
-            
+
             # Combine all text segments
-            full_transcript = " ".join([entry['text'] for entry in transcript_list])
+            full_transcript = " ".join([snippet.text for snippet in transcript.snippets])
             
             # Save backup
             save_transcript_to_file(video_id, full_transcript)
